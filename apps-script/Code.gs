@@ -374,8 +374,10 @@ function placeRow_(sh, r, c, priority) {
   if (last < 3) return;
   const data = sh.getRange(2, 1, last - 1, Math.max(c.pri, c.text, c.done) + 1).getValues();
   const isDone = row => c.done >= 0 && data[row - 2][c.done] === true;
-  const rankOf = row => isDone(row) ? 10 + (RANK[String(data[row - 2][c.pri])] ?? 9) : (RANK[String(data[row - 2][c.pri])] ?? 9);
-  const mine = r >= 2 && r <= last ? rankOf(r) : (RANK[priority] ?? 9);
+  // Same order as the sheets' own script: New, High, Medium, blank, Low; done rows below all of them.
+  const rk = p => { p = String(p).trim(); return p in RANK ? RANK[p] : 2.5; };
+  const rankOf = row => (isDone(row) ? 10 : 0) + rk(data[row - 2][c.pri]);
+  const mine = r >= 2 && r <= last ? rankOf(r) : rk(priority);
   let dest = -1, lastFilled = 1;
   for (let i = 0; i < data.length; i++) {
     const row = i + 2;
