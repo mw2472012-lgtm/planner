@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#7a3320">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Voice notes</title>
+<style>
+  :root {
+    --bg: #f5f2ec; --card: #ffffff; --ink: #1d1d1b; --soft: #6b675f; --line: #e2ddd3;
+    --brand: #7a3320; --green: #1f3a2e; --danger: #c8402f; --radius: 16px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 18px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+  .hidden { display: none !important; }
+
+  header { background: var(--brand); color: #fff; padding: calc(12px + env(safe-area-inset-top)) 14px 12px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  header h1 { margin: 0; font-size: 22px; }
+  header a { color: #fff; text-decoration: none; font-weight: 700; font-size: 16px; padding: 12px 14px;
+    border-radius: 12px; background: rgba(255,255,255,.15); white-space: nowrap; }
+  .status { font-size: 14px; color: var(--soft); margin: 10px 2px 0; min-height: 20px; }
+
+  main { max-width: 640px; margin: 0 auto; padding: 14px 14px calc(30px + env(safe-area-inset-bottom)); }
+  textarea { display: block; width: 100%; min-height: 34vh; font: inherit; font-size: 21px; padding: 16px;
+    border-radius: 18px; border: 2px solid var(--line); background: #fff; resize: vertical; }
+  textarea:focus { outline: none; border-color: var(--brand); }
+  .bigbtn { width: 100%; min-height: 64px; border-radius: 18px; background: var(--brand); color: #fff;
+    font-size: 21px; font-weight: 700; margin-top: 12px; box-shadow: 0 6px 18px rgba(122,51,32,.28); }
+  .bigbtn:disabled { opacity: .4; box-shadow: none; }
+  .bigbtn.danger { background: var(--danger); }
+  .bigbtn.ghost { background: #fff; color: var(--ink); border: 2px solid var(--line); box-shadow: none; }
+
+  h2 { font-size: 15px; font-weight: 700; color: var(--soft); text-transform: uppercase; letter-spacing: .04em;
+    margin: 26px 2px 10px; }
+  .card { display: block; width: 100%; text-align: left; background: var(--card); border-radius: var(--radius);
+    padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 1px 0 var(--line); }
+  .card .text { font-size: 18px; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .card .meta { margin-top: 6px; font-size: 14px; color: var(--soft); }
+  .card.pending .meta::after { content: " · sending when there's signal"; font-style: italic; }
+  .empty { color: var(--soft); text-align: center; padding: 18px; }
+
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 10; }
+  .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 11; background: var(--bg);
+    border-radius: 22px 22px 0 0; padding: 16px 16px calc(18px + env(safe-area-inset-bottom));
+    max-width: 640px; margin: 0 auto; }
+  .sheet textarea { min-height: 150px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .toast { position: fixed; left: 12px; right: 12px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 20;
+    background: #222; color: #fff; border-radius: 14px; padding: 16px; font-size: 17px; text-align: center; }
+
+  .setup { padding: 30px 8px; }
+  .setup p { color: var(--soft); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎤 Voice notes</h1>
+  <a href="../" id="plannerLink">Planner →</a>
+</header>
+
+<main>
+  <section id="setup" class="setup hidden">
+    <p>This isn't linked to your sheets yet.</p>
+    <p>Open the <b>Planner</b> app once on this device (from the “Your Planner app link” email), then come back here.</p>
+  </section>
+
+  <section id="app" class="hidden">
+    <textarea id="note" placeholder="Tap here and talk with Wispr Flow. Say as many things as you like – they get split up and sorted tonight."></textarea>
+    <button class="bigbtn" id="save" disabled>Save note</button>
+    <div class="status" id="status"></div>
+
+    <h2 id="waitHead">Waiting for tonight's sort</h2>
+    <div id="list"></div>
+  </section>
+</main>
+
+<div id="scrim" class="scrim hidden"></div>
+<div id="sheet" class="sheet hidden">
+  <textarea id="edText"></textarea>
+  <div class="row">
+    <button class="bigbtn danger" id="edDelete">Delete</button>
+    <button class="bigbtn" id="edSave">Save</button>
+  </div>
+  <button class="bigbtn ghost" id="edClose">Cancel</button>
+</div>
+<div id="toast" class="toast hidden"></div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // Shares the Planner app's link and key (same web address, so same saved settings).
+  const store = {
+    get: (k, d) => { try { return JSON.parse(localStorage.getItem('planner.' + k)) ?? d; } catch { return d; } },
+    set: (k, v) => { try { localStorage.setItem('planner.' + k, JSON.stringify(v)); } catch {} },
+  };
+
+  if (location.hash.startsWith('#setup=')) {
+    try {
+      const s = JSON.parse(decodeURIComponent(location.hash.slice(7)));
+      if (s.api && s.key) { store.set('settings', s); store.set('data', null); }
+    } catch {}
+    history.replaceState(null, '', location.pathname);
+  }
+
+  const settings = store.get('settings', null);
+  let waiting = store.get('voice', []);        // notes on the server, last we heard
+  let outbox = store.get('voiceOutbox', []);   // changes not sent yet
+  let busy = false, lastError = '', editing = null;
+
+  const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+
+  async function call(op) {
+    if (settings.demo) {
+      if (op.action === 'inboxList') return waiting.filter(n => !n.pending);
+      return true;
+    }
+    const res = await fetch(settings.api, {
+      method: 'POST', redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ ...op, key: settings.key }),
+    });
+    const json = await res.json();
+    if (!json.ok) { const e = new Error(json.error || 'Something went wrong'); e.server = true; throw e; }
+    return json.data;
+  }
+
+  // What to show: the server's list with unsent changes laid on top.
+  function view() {
+    let list = waiting.map(n => ({ ...n }));
+    outbox.forEach(op => {
+      if (op.action === 'inboxAdd' && !list.some(n => n.id === op.id)) list.push({ id: op.id, text: op.text, at: op.at, pending: true });
+      if (op.action === 'inboxEdit') list.forEach(n => { if (n.id === op.id) { n.text = op.text; n.pending = true; } });
+      if (op.action === 'inboxRemove') list = list.filter(n => n.id !== op.id);
+    });
+    return list.sort((a, b) => b.at - a.at);
+  }
+
+  async function sync() {
+    if (busy || !settings) return;
+    busy = true; render();
+    try {
+      while (outbox.length) {
+        try { await call(outbox[0]); }
+        catch (e) {
+          // No signal, or the Google script hasn't been updated yet: keep the note on the phone.
+          if (!e.server || /Unknown action/.test(e.message)) { if (e.server) e.message = 'Waiting for the Google script update – notes are safe on this phone.'; throw e; }
+          toast('Couldn’t save: ' + e.message);
+        }
+        if (settings.demo && outbox[0].action === 'inboxAdd') waiting.push({ id: outbox[0].id, text: outbox[0].text, at: outbox[0].at });
+        if (settings.demo && outbox[0].action === 'inboxRemove') waiting = waiting.filter(n => n.id !== outbox[0].id);
+        if (settings.demo && outbox[0].action === 'inboxEdit') waiting.forEach(n => { if (n.id === outbox[0].id) n.text = outbox[0].text; });
+        outbox.shift(); store.set('voiceOutbox', outbox);
+      }
+      waiting = await call({ action: 'inboxList' });
+      store.set('voice', waiting); lastError = '';
+    } catch (e) {
+      lastError = e.server ? e.message : 'No signal: your notes are kept on this phone and sent later.';
+    }
+    busy = false; render();
+  }
+
+  function queue(op) { outbox.push(op); store.set('voiceOutbox', outbox); render(); sync(); }
+
+  function render() {
+    if (!settings) { $('#setup').classList.remove('hidden'); $('#app').classList.add('hidden'); return; }
+    $('#setup').classList.add('hidden'); $('#app').classList.remove('hidden');
+    const list = view();
+    $('#waitHead').textContent = `Waiting for tonight's sort (${list.length})`;
+    $('#list').innerHTML = list.length ? list.map(n => `
+      <button class="card ${n.pending ? 'pending' : ''}" data-id="${esc(n.id)}">
+        <div class="text">${esc(n.text)}</div>
+        <div class="meta">${esc(when(n.at))}</div>
+      </button>`).join('') : '<div class="empty">Nothing waiting. Anything you save goes into Personal or WORK at 8pm.</div>';
+    $('#status').textContent = settings.demo ? 'Demo: nothing is saved to your sheets'
+      : busy ? 'Saving…'
+      : lastError || (outbox.length ? `${outbox.length} waiting for signal` : 'Sorted into Personal & WORK at 8pm, then shown in Planner.');
+  }
+  const when = t => {
+    if (!t) return '';
+    const d = new Date(t), today = new Date().toDateString() === d.toDateString();
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return today ? 'Today ' + time : d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + time;
+  };
+
+  // ---- Saving ----
+  const note = $('#note');
+  const saveBtn = $('#save');
+  note.value = store.get('voiceDraft', '');
+  const updateBtn = () => { saveBtn.disabled = !note.value.trim(); };
+  note.addEventListener('input', () => { updateBtn(); store.set('voiceDraft', note.value); });
+  updateBtn();
+  function save() {
+    const text = note.value.trim();
+    if (!text) return;
+    queue({ action: 'inboxAdd', id: uid(), text, at: Date.now() });
+    note.value = ''; store.set('voiceDraft', ''); updateBtn();
+    toast('Saved ✓');
+    note.focus();
+  }
+  saveBtn.onclick = save;
+  note.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); } });
+
+  // ---- Edit / delete a waiting note ----
+  $('#list').onclick = e => {
+    const c = e.target.closest('.card'); if (!c) return;
+    editing = view().find(n => n.id === c.dataset.id); if (!editing) return;
+    $('#edText').value = editing.text;
+    $('#sheet').classList.remove('hidden'); $('#scrim').classList.remove('hidden');
+  };
+  const closeSheet = () => { $('#sheet').classList.add('hidden'); $('#scrim').classList.add('hidden'); editing = null; };
+  $('#scrim').onclick = closeSheet; $('#edClose').onclick = closeSheet;
+  $('#edSave').onclick = () => {
+    const text = $('#edText').value.trim();
+    if (editing && text && text !== editing.text) { queue({ action: 'inboxEdit', id: editing.id, text }); toast('Saved ✓'); }
+    closeSheet();
+  };
+  $('#edDelete').onclick = () => {
+    if (!editing) return;
+    if ($('#edDelete').dataset.armed !== '1') { $('#edDelete').dataset.armed = '1'; $('#edDelete').textContent = 'Tap again'; return; }
+    queue({ action: 'inboxRemove', id: editing.id }); toast('Deleted');
+    $('#edDelete').dataset.armed = ''; $('#edDelete').textContent = 'Delete';
+    closeSheet();
+  };
+
+  let toastTimer;
+  function toast(msg) {
+    $('#toast').textContent = msg; $('#toast').classList.remove('hidden');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').classList.add('hidden'), 2000);
+  }
+
+  window.addEventListener('online', sync);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { sync(); note.focus(); } });
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+  render();
+  sync();
+  if (settings) setTimeout(() => note.focus(), 300);
+})();
+</script>
+</body>
+</html>
