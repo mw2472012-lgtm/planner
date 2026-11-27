@@ -91,6 +91,12 @@
   .prio button.on[data-p="Low"] { background: var(--p-low); border-color: var(--p-low); }
   .prio { display: grid; grid-template-columns: repeat(4, 1fr); }
   .actions { display: grid; gap: 10px; margin-top: 20px; }
+  .when { display: grid; grid-template-columns: 1.3fr 1.1fr auto; gap: 8px; }
+  .when input { min-width: 0; min-height: 54px; font: inherit; font-size: 18px; padding: 0 10px; border-radius: 14px;
+    border: 2px solid var(--line); background: #fff; color: var(--ink); }
+  .when input:focus { outline: none; border-color: var(--brand); }
+  .when button { min-height: 54px; padding: 0 14px; border-radius: 14px; background: #fff; border: 2px solid var(--line); font-weight: 600; }
+  .modified { margin-top: 14px; font-size: 15px; color: var(--soft); }
   .info { margin-top: 12px; font-size: 15px; color: var(--soft); }
   .info a { color: var(--brand); font-weight: 600; }
   .links a { display: block; padding: 10px 0; color: var(--brand); font-weight: 600; overflow-wrap: anywhere; font-size: 15px; }
@@ -123,6 +129,7 @@
         <button data-book="personal">Personal</button>
         <button data-book="work">Work</button>
       </div>
+      <a class="iconbtn" id="voiceBtn" href="voice/" aria-label="Voice notes" style="text-decoration:none">🎤</a>
       <button class="iconbtn" id="refreshBtn" aria-label="Refresh"><span>⟳</span></button>
     </div>
     <nav class="tabs" id="tabs"></nav>
@@ -239,6 +246,9 @@
       else if (op.action === 'update') {
         if (op.newText) it.text = op.newText.trim();
         if (typeof op.area === 'string') it.area = op.area;
+        if (typeof op.remind === 'string') it.remind = remindToText(op.remind);
+        if (typeof op.repeat === 'string') it.repeat = op.repeat;
+        it.modified = new Date().toLocaleDateString('en-GB');
         if (op.priority) {
           it.priority = op.priority;
           td.items.splice(i, 1);
@@ -271,6 +281,17 @@
     if (!busy) refresh();
   }
 
+  // ---------- Reminder dates: sheet shows dd/mm/yyyy [hh:mm], the date/time boxes use yyyy-mm-dd and hh:mm ----------
+  function remindToInputs(t) {
+    const m = String(t || '').match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}:\d{2}))?/);
+    return m ? { date: `${m[3]}-${m[2]}-${m[1]}`, time: m[4] || '' } : { date: '', time: '' };
+  }
+  const inputsToRemind = (date, time) => date ? date + (time ? 'T' + time : '') : '';
+  function remindToText(v) {
+    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}:\d{2}))?/);
+    return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] && m[4] !== '00:00' ? ' ' + m[4] : ''}` : '';
+  }
+
   // ---------- Drawing the screen ----------
   function setStatus() {
     const el = $('#status');
@@ -278,7 +299,9 @@
     if (outbox.length) { el.textContent = `${outbox.length} change${outbox.length > 1 ? 's' : ''} waiting for signal`; return; }
     if (lastError) { el.textContent = lastError; return; }
     const t = store.get('synced', 0);
-    el.textContent = settings?.demo ? 'Demo: made-up notes, nothing is saved' : t ? 'Up to date ' + ago(t) : '';
+    const v = (data?.voice || []).length;
+    const voice = v ? ` · 🎤 ${v} voice note${v > 1 ? 's' : ''} for 8pm sort` : '';
+    el.textContent = settings?.demo ? 'Demo: made-up notes, nothing is saved' : t ? 'Up to date ' + ago(t) + voice : '';
   }
   const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : 'at ' + new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
 
@@ -303,7 +326,7 @@
       const meta = [
         it.priority ? `<span class="pill" style="background:${PCOL[it.priority] || 'var(--p-low)'}">${esc(it.priority)}</span>` : '',
         it.area ? `<span>${esc(it.area)}</span>` : '',
-        it.remind ? `<span>🔔 ${esc(it.remind)}</span>` : '',
+        it.remind ? `<span>🔔 ${esc(it.remind)}${it.repeat ? ' · 🔁 ' + esc(it.repeat.replace('Every ', '')) : ''}</span>` : '',
         it.hasNote ? '<span>📝 note</span>' : '',
       ].join('');
       return `<button class="card ${it.done ? 'done' : ''} ${it.pending ? 'pending' : ''}" data-i="${td.items.indexOf(it)}">
@@ -330,6 +353,8 @@
   function openItem(it) {
     const td = tabData();
     let prio = it.priority, area = it.area, armed = false;
+    const rIn = remindToInputs(it.remind);
+    let repeat = it.repeat || '';
     const doneWord = td.doneLabel ? td.doneLabel + ' ✓' : 'Delete';
     const links = it.text.match(URL_RE) || [];
     const sheetUrl = data[book].url.replace(/\/edit.*$/, '') + '/edit#gid=' + td.gid;
@@ -341,6 +366,11 @@
       <div class="chips prio" id="edPrio">${Object.keys(RANK).map(p => `<button data-p="${p}" class="${p === prio ? 'on' : ''}">${p}</button>`).join('')}</div>
       ${td.areas.length ? `<div class="label">${esc(td.areaLabel || 'Area')}</div>
       <div class="chips" id="edArea">${td.areas.map(a => `<button data-a="${esc(a)}" class="${a === area ? 'on' : ''}">${esc(a)}</button>`).join('')}</div>` : ''}
+      ${td.hasRemind ? `<div class="label">📅 Remind me on</div>
+      <div class="when"><input type="date" id="edDate" value="${rIn.date}"><input type="time" id="edTime" value="${rIn.time}"><button id="edClear">Clear</button></div>
+      ${td.repeatOptions?.length ? `<div class="label">🔁 Repeat</div>
+      <div class="chips" id="edRepeat">${['', ...td.repeatOptions].map(o => `<button data-r="${esc(o)}" class="${o === repeat ? 'on' : ''}">${o ? esc(o) : 'Once'}</button>`).join('')}</div>` : ''}` : ''}
+      <div class="modified">✏️ Last changed: ${esc(it.modified || 'not recorded')}</div>
       ${it.done ? '' : `<div class="label">Move to</div>
       <div class="chips" id="edMove">${Object.keys(BOOKNAME).flatMap(b2 => (data[b2]?.tabs || [])
         .filter(t2 => !(b2 === book && t2.name === tab))
@@ -350,7 +380,16 @@
         <button class="bigbtn" id="edSave" disabled>Save changes</button>
         ${it.done ? '' : `<button class="bigbtn ${td.doneLabel ? 'ok' : 'danger'}" id="edDone">${doneWord}</button>`}
       </div>`);
-    const changed = () => $('#edSave').disabled = !($('#edText').value.trim() !== it.text || prio !== it.priority || area !== it.area);
+    const remindVal = () => td.hasRemind ? inputsToRemind($('#edDate').value, $('#edTime').value) : '';
+    const remindWas = inputsToRemind(rIn.date, rIn.time);
+    const changed = () => $('#edSave').disabled = !($('#edText').value.trim() !== it.text || prio !== it.priority || area !== it.area
+      || (td.hasRemind && (remindVal() !== remindWas || repeat !== (it.repeat || ''))));
+    if (td.hasRemind) {
+      $('#edDate').oninput = changed; $('#edTime').oninput = changed;
+      $('#edClear').onclick = () => { $('#edDate').value = ''; $('#edTime').value = ''; changed(); };
+      $('#edRepeat') && ($('#edRepeat').onclick = e => { const b = e.target.closest('button'); if (!b) return; repeat = b.dataset.r;
+        $('#edRepeat').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); changed(); });
+    }
     $('#edText').oninput = changed;
     $('#edPrio').onclick = e => { const b = e.target.closest('button'); if (!b) return; prio = b.dataset.p;
       $('#edPrio').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); changed(); };
@@ -363,6 +402,8 @@
       if (nt && nt !== it.text) op.newText = nt;
       if (prio !== it.priority) op.priority = prio;
       if (area !== it.area) op.area = area;
+      if (td.hasRemind && remindVal() !== remindWas) op.remind = remindVal();
+      if (td.hasRemind && repeat !== (it.repeat || '')) op.repeat = repeat;
       closeSheet(); send(op); toast('Saved ✓');
     };
     $('#edMove') && ($('#edMove').onclick = e => {
@@ -444,7 +485,8 @@
     const P = ['Home & garden', 'Family', 'Money', 'Health & mind'];
     const W = ['Closing the company', 'Jobs & income', 'Business ideas', 'Channel', 'AI & learning'];
     const tabOf = (name, areas, doneLabel, items, areaLabel = 'Area') =>
-      ({ name, gid: 0, areaLabel, doneLabel, areas, items: items.map((x, i) => ({ row: i + 2, text: x[1], priority: x[0], area: x[2] || '', done: false, hasNote: !!x[3], remind: x[4] || '' })) });
+      ({ name, gid: 0, areaLabel, doneLabel, areas, hasRemind: name === 'To-do', repeatOptions: name === 'To-do' ? ['Every 1 hr', 'Every 3 hrs', 'Every 6 hrs'] : [],
+        items: items.map((x, i) => ({ row: i + 2, text: x[1], priority: x[0], area: x[2] || '', done: false, hasNote: !!x[3], remind: x[4] || '', repeat: x[5] || '', modified: '26/11/2026' })) });
     return {
       personal: { url: 'https://docs.google.com/spreadsheets/d/demo/edit', tabs: [
         tabOf('To-do', P, 'Done', [['New', 'Ring the garage about the MOT', 'Money'], ['High', 'Fix the side gate latch', 'Home & garden', 1, '02/12/2026'], ['Medium', 'Book swimming lessons', 'Family'], ['Low', 'Sort the loft', 'Home & garden']]),
