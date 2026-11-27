@@ -6,7 +6,9 @@
  * scripts don't react to changes made by another script:
  *   - new notes go in at the top, marked New, with today's Date modified
  *   - changing Priority moves the row into place (New, High, Medium, Low)
- *   - Done? / Bought? deletes the row; Captured? (To film) ticks it and keeps it
+ *   - Done? / Bought? ticks the row and moves it to the bottom; clearDoneRows() deletes them every
+ *     Sunday night (setUp() installs that). Captured? (To film) ticks it and keeps it.
+ *   - the 📝 notes box is the cell's own note on the 📝 column (blue when it has one)
  *   - voice notes from the Voice notes app wait in a hidden "Voice inbox" tab in Personal
  *     until the 8pm job sorts them into the right sheet and tab
  */
@@ -30,6 +32,29 @@ function sendMeTheLink() {
   MailApp.sendEmail(Session.getEffectiveUser().getEmail(), 'Your Planner app link',
     'Open this on your phone (in Chrome):\n\n' + link + '\n\nThen tap Chrome\'s menu and choose "Install app" or "Add to Home screen".\nKeep this email private: the link lets anyone who has it read and change your lists.');
   Logger.log('Sent. Check your email on your phone.');
+}
+
+/** Run this once after pasting the code: it sets up the Sunday-night clear-out of done rows. */
+function setUp() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'clearDoneRows').forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('clearDoneRows').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(21).create();
+  Logger.log('Done rows will be cleared every Sunday at about 9pm.');
+}
+
+/** Deletes ticked Done? / Bought? rows (not To film) from both sheets. Runs every Sunday night. */
+function clearDoneRows() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    Object.keys(BOOKS).forEach(b => BOOKS[b].tabs.filter(t => t !== 'To film').forEach(t => {
+      const sh = SpreadsheetApp.openById(BOOKS[b].id).getSheetByName(t);
+      if (!sh || sh.getLastRow() < 2) return;
+      const c = cols_(sh);
+      if (c.done < 0) return;
+      const v = sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(c.done, c.text) + 1).getValues();
+      for (let i = v.length - 1; i >= 0; i--) if (v[i][c.done] === true && String(v[i][c.text]).trim()) sh.deleteRow(i + 2);
+    }));
+  } finally { lock.releaseLock(); }
 }
 
 /** Run this if the link ever leaks: it makes a new key, so the old link stops working. */
@@ -142,12 +167,22 @@ const ACTIONS = {
     const sh = sheet_(p.book, p.tab);
     const r = find_(sh, p);
     const c = cols_(sh);
-    if (p.tab === 'To film') {
-      sh.getRange(r, c.done + 1).setValue(true);
-      touch_(sh, r, c);
-    } else {
-      sh.deleteRow(r);
-    }
+    if (c.done < 0) { sh.deleteRow(r); return true; }
+    sh.getRange(r, c.done + 1).setValue(true);
+    touch_(sh, r, c);
+    if (p.tab !== 'To film') placeRow_(sh, r, c, String(sh.getRange(r, c.pri + 1).getValue()));
+    return true;
+  },
+
+  /** Untick Done? / Bought?: the row goes back up to its priority. */
+  undone(p) {
+    const sh = sheet_(p.book, p.tab);
+    const r = find_(sh, p);
+    const c = cols_(sh);
+    if (c.done < 0) return true;
+    sh.getRange(r, c.done + 1).setValue(false);
+    touch_(sh, r, c);
+    placeRow_(sh, r, c, String(sh.getRange(r, c.pri + 1).getValue()));
     return true;
   },
 
@@ -165,6 +200,10 @@ const ACTIONS = {
     const c = cols_(sh);
     if (typeof p.newText === 'string' && p.newText.trim()) sh.getRange(r, c.text + 1).setValue(p.newText.trim());
     if (c.area >= 0 && typeof p.area === 'string') sh.getRange(r, c.area + 1).setValue(p.area);
+    if (c.note >= 0 && typeof p.note === 'string') {
+      const n = p.note.trim();
+      sh.getRange(r, c.note + 1).setNote(n || null).setBackground(n ? '#9fc5e8' : null);
+    }
     if (c.remind >= 0 && typeof p.remind === 'string') setRemind_(sh.getRange(r, c.remind + 1), p.remind);
     if (c.repeat >= 0 && typeof p.repeat === 'string') sh.getRange(r, c.repeat + 1).setValue(p.repeat);
     touch_(sh, r, c);
@@ -215,6 +254,7 @@ function readTab_(ss, name) {
   if (last >= 2) {
     const values = sh.getRange(2, 1, last - 1, n).getValues();
     const noteBg = c.note >= 0 ? sh.getRange(2, c.note + 1, last - 1, 1).getBackgrounds() : null;
+    const notes = c.note >= 0 ? sh.getRange(2, c.note + 1, last - 1, 1).getNotes() : null;
     const tz = ss.getSpreadsheetTimeZone();
     values.forEach((v, i) => {
       const text = String(v[c.text] || '').trim();
@@ -225,7 +265,8 @@ function readTab_(ss, name) {
         priority: c.pri >= 0 ? String(v[c.pri] || '') : '',
         area: c.area >= 0 ? String(v[c.area] || '') : '',
         done: c.done >= 0 ? v[c.done] === true : false,
-        hasNote: noteBg ? !/^#?(ffffff|fff)$/i.test(noteBg[i][0]) : false,
+        hasNote: notes && notes[i][0] ? true : noteBg ? !/^#?(ffffff|fff)$/i.test(noteBg[i][0]) : false,
+        note: notes ? String(notes[i][0] || '') : '',
         modified: fmt_(v[c.date], tz),
         remind: fmt_(v[c.remind], tz, true),
         repeat: c.repeat >= 0 ? String(v[c.repeat] || '') : '',
@@ -240,6 +281,7 @@ function readTab_(ss, name) {
     areas: areas,
     items: items,
     hasRemind: c.remind >= 0,
+    hasNoteBox: c.note >= 0,
     repeatOptions: c.repeat >= 0 && sh.getMaxRows() >= 2 ? listOf_(sh.getRange(2, c.repeat + 1)) : [],
   };
 }
@@ -314,16 +356,17 @@ function find_(sh, p) {
 function placeRow_(sh, r, c, priority) {
   const last = sh.getLastRow();
   if (last < 3) return;
-  const data = sh.getRange(2, 1, last - 1, Math.max(c.pri, c.text) + 1).getValues();
-  const mine = RANK[priority];
+  const data = sh.getRange(2, 1, last - 1, Math.max(c.pri, c.text, c.done) + 1).getValues();
+  const isDone = row => c.done >= 0 && data[row - 2][c.done] === true;
+  const rankOf = row => isDone(row) ? 10 + (RANK[String(data[row - 2][c.pri])] ?? 9) : (RANK[String(data[row - 2][c.pri])] ?? 9);
+  const mine = r >= 2 && r <= last ? rankOf(r) : (RANK[priority] ?? 9);
   let dest = -1, lastFilled = 1;
   for (let i = 0; i < data.length; i++) {
     const row = i + 2;
     if (!String(data[i][c.text]).trim()) continue;
     lastFilled = row;
     if (row === r) continue;
-    const rank = String(data[i][c.pri]) in RANK ? RANK[String(data[i][c.pri])] : 9;
-    if (dest < 0 && rank > mine) dest = row;
+    if (dest < 0 && rankOf(row) > mine) dest = row;
   }
   if (dest < 0) dest = lastFilled + 1;
   if (dest === r || dest === r + 1) return;
