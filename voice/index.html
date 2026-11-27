@@ -26,6 +26,9 @@
   header h1 { margin: 0; font-size: 22px; }
   header a { color: #fff; text-decoration: none; font-weight: 700; font-size: 16px; padding: 12px 14px;
     border-radius: 12px; background: rgba(255,255,255,.15); white-space: nowrap; }
+  .undo { display: block; margin: 8px 0 0 auto; min-height: 48px; padding: 0 18px; border-radius: 12px;
+    background: #fff; border: 2px solid var(--line); font-weight: 600; font-size: 17px; }
+  .undo:disabled { opacity: .35; }
   .status { font-size: 14px; color: var(--soft); margin: 10px 2px 0; min-height: 20px; }
 
   main { max-width: 640px; margin: 0 auto; padding: 14px 14px calc(30px + env(safe-area-inset-bottom)); }
@@ -74,6 +77,7 @@
 
   <section id="app" class="hidden">
     <textarea id="note" placeholder="Talk with Wispr Flow. It saves by itself – just close the app when you're done."></textarea>
+    <button class="undo" id="undo" type="button" disabled>↶ Undo</button>
     <button class="bigbtn" id="save" disabled>Save now</button>
     <div class="status" id="status"></div>
 
@@ -196,6 +200,30 @@
   const saveBtn = $('#save');
   note.value = store.get('voiceDraft', '');
   const updateBtn = () => { saveBtn.disabled = !note.value.trim(); };
+  // Undo: steps back through what was typed or dictated. With an empty box, it brings back
+  // the note that just saved itself (and takes it back out of tonight's sort).
+  const undoBtn = $('#undo');
+  let hist = [note.value], histT, lastSaved = null;
+  const refreshUndo = () => { undoBtn.disabled = !(hist.length > 1 || note.value !== hist[0] || (!note.value && lastSaved)); };
+  note.addEventListener('input', e => {
+    if (e.isUndo) return;
+    clearTimeout(histT);
+    histT = setTimeout(() => { if (note.value !== hist[hist.length - 1]) hist.push(note.value); refreshUndo(); }, 600);
+    refreshUndo();
+  });
+  undoBtn.onclick = () => {
+    clearTimeout(histT);
+    if (!note.value.trim() && lastSaved) {
+      queue({ action: 'inboxRemove', id: lastSaved.id });
+      note.value = lastSaved.text; hist = ['', note.value]; lastSaved = null;
+      toast('Brought back – not saved');
+    } else if (note.value !== hist[hist.length - 1]) note.value = hist[hist.length - 1];
+    else if (hist.length > 1) { hist.pop(); note.value = hist[hist.length - 1]; }
+    store.set('voiceDraft', note.value); updateBtn(); refreshUndo();
+    clearTimeout(idle);   // nothing saves itself until you type or talk again (closing the app still saves)
+    note.focus();
+  };
+
   let idle;
   note.addEventListener('input', () => {
     updateBtn(); store.set('voiceDraft', note.value);
@@ -207,8 +235,11 @@
     const text = note.value.trim();
     if (!text) return;
     if (auto && document.activeElement === note && note.selectionStart !== note.value.length) return; // still editing in the middle
-    queue({ action: 'inboxAdd', id: uid(), text, at: Date.now() });
+    const id = uid();
+    queue({ action: 'inboxAdd', id, text, at: Date.now() });
+    lastSaved = { id, text };
     note.value = ''; store.set('voiceDraft', ''); updateBtn();
+    hist = ['']; refreshUndo();
     toast('Saved ✓');
     if (!auto) note.focus();
   }

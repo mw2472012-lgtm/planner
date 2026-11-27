@@ -6,8 +6,9 @@
  * scripts don't react to changes made by another script:
  *   - new notes go in at the top, marked New, with today's Date modified
  *   - changing Priority moves the row into place (New, High, Medium, Low)
- *   - Done? / Bought? ticks the row and moves it to the bottom; clearDoneRows() deletes them every
- *     Sunday night (setUp() installs that). Captured? (To film) ticks it and keeps it.
+ *   - Done? / Bought? ticks the row and strikes it through where it is; overnight endOfDay() moves it
+ *     to the bottom of its own priority group, and clearDoneRows() deletes done rows every Sunday night
+ *     (setUp() installs both). Captured? (To film) ticks it and keeps it.
  *   - the 📝 notes box is the cell's own note on the 📝 column (blue when it has one)
  *   - voice notes from the Voice notes app wait in a hidden "Voice inbox" tab in Personal
  *     until the 8pm job sorts them into the right sheet and tab
@@ -23,6 +24,9 @@ const BOOKS = {
   work:     { id: '1ueRmxGq1M2oQX3TkOfiEPdLRHQ-Yw9h5eAbsH-C5tOc', tabs: ['To-do', 'To buy', 'Remember', 'Notes & ideas', 'To film'] },
 };
 const RANK = { New: 0, High: 1, Medium: 2, Low: 3 };
+// Sort order, same as the sheets' own script: New, High, Medium, blank, Low.
+const SORT_RANK = { New: 0, High: 1, Medium: 2, '': 3, Low: 4 };
+const TZ = 'Europe/London';
 const INBOX_TAB = 'Voice inbox';   // hidden tab in Personal: Note | Recorded | ID
 
 /** Run this once after deploying: it emails you the link to open on your phone. */
@@ -36,9 +40,54 @@ function sendMeTheLink() {
 
 /** Run this once after pasting the code: it sets up the Sunday-night clear-out of done rows. */
 function setUp() {
-  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'clearDoneRows').forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('clearDoneRows').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(21).create();
-  Logger.log('Done rows will be cleared every Sunday at about 9pm.');
+  ScriptApp.getProjectTriggers().filter(t => ['clearDoneRows', 'endOfDay'].indexOf(t.getHandlerFunction()) >= 0).forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('endOfDay').timeBased().atHour(0).nearMinute(30).everyDays(1).inTimezone(TZ).create();
+  ScriptApp.newTrigger('clearDoneRows').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(21).inTimezone(TZ).create();
+  Logger.log('All set: done rows move down their priority group each night at about 12:30am, and are cleared every Sunday at about 9pm.');
+}
+
+/** Runs each night: rows ticked done on an earlier day move to the bottom of their own priority group. */
+function endOfDay() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    Object.keys(BOOKS).forEach(b => BOOKS[b].tabs.filter(t => t !== 'To film').forEach(t => {
+      const sh = SpreadsheetApp.openById(BOOKS[b].id).getSheetByName(t);
+      if (sh) sortTab_(sh);
+    }));
+  } finally { lock.releaseLock(); }
+}
+
+/** Where a row belongs: its priority group, and within it, done-before-today rows go last. */
+function orderKey_(c, v) {
+  const p = String(v[c.pri] || '').trim();
+  const rank = p in SORT_RANK ? SORT_RANK[p] : 3;
+  const done = c.done >= 0 && v[c.done] === true;
+  const doneBefore = done && c.date >= 0 && dayOf_(v[c.date]) < Utilities.formatDate(new Date(), TZ, 'yyyyMMdd');
+  return rank * 2 + (doneBefore ? 1 : 0);
+}
+
+/** 'yyyyMMdd' for a Date or a dd/mm/yyyy text date ('' if neither). */
+function dayOf_(d) {
+  if (d instanceof Date) return Utilities.formatDate(d, TZ, 'yyyyMMdd');
+  const m = String(d || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  return m ? m[3] + ('0' + m[2]).slice(-2) + ('0' + m[1]).slice(-2) : '';
+}
+
+/** Sorts a whole tab with the sheet's own sort (notes, colours and tick-boxes move with their rows). */
+function sortTab_(sh) {
+  const c = cols_(sh);
+  const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  let width = head.length; while (width > 0 && !String(head[width - 1]).trim()) width--;
+  const t = sh.getLastRow() >= 2 ? sh.getRange(2, c.text + 1, sh.getLastRow() - 1, 1).getValues() : [];
+  let last = t.length + 1; while (last >= 2 && !String(t[last - 2][0]).trim()) last--;
+  if (last < 3) return;
+  const n = last - 1, helper = width + 1;
+  const v = sh.getRange(2, 1, n, width).getValues();
+  const hr = sh.getRange(2, helper, n, 1);
+  hr.setValues(v.map((row, i) => [(String(row[c.text]).trim() ? orderKey_(c, row) : 99) * 100000 + i]));
+  sh.getRange(2, 1, n, helper).sort({ column: helper, ascending: true });
+  hr.clearContent();
 }
 
 /** Deletes ticked Done? / Bought? rows (not To film) from both sheets. Runs every Sunday night. */
@@ -169,8 +218,8 @@ const ACTIONS = {
     const c = cols_(sh);
     if (c.done < 0) { sh.deleteRow(r); return true; }
     sh.getRange(r, c.done + 1).setValue(true);
+    if (p.tab !== 'To film') sh.getRange(r, c.text + 1).setFontLine('line-through');   // stays where it is until tonight
     touch_(sh, r, c);
-    if (p.tab !== 'To film') placeRow_(sh, r, c, String(sh.getRange(r, c.pri + 1).getValue()));
     return true;
   },
 
@@ -181,6 +230,7 @@ const ACTIONS = {
     const c = cols_(sh);
     if (c.done < 0) return true;
     sh.getRange(r, c.done + 1).setValue(false);
+    sh.getRange(r, c.text + 1).setFontLine('none');
     touch_(sh, r, c);
     placeRow_(sh, r, c, String(sh.getRange(r, c.pri + 1).getValue()));
     return true;
@@ -372,12 +422,11 @@ function find_(sh, p) {
 function placeRow_(sh, r, c, priority) {
   const last = sh.getLastRow();
   if (last < 3) return;
-  const data = sh.getRange(2, 1, last - 1, Math.max(c.pri, c.text, c.done) + 1).getValues();
-  const isDone = row => c.done >= 0 && data[row - 2][c.done] === true;
-  // Same order as the sheets' own script: New, High, Medium, blank, Low; done rows below all of them.
-  const rk = p => { p = String(p).trim(); return p in RANK ? RANK[p] : 2.5; };
-  const rankOf = row => (isDone(row) ? 10 : 0) + rk(data[row - 2][c.pri]);
-  const mine = r >= 2 && r <= last ? rankOf(r) : rk(priority);
+  const data = sh.getRange(2, 1, last - 1, Math.max(c.pri, c.text, c.done, c.date) + 1).getValues();
+  // Same order as the sheets' own script (New, High, Medium, blank, Low); within a priority,
+  // rows ticked done before today sit at the bottom of that priority.
+  const rankOf = row => orderKey_(c, data[row - 2]);
+  const mine = r >= 2 && r <= last ? rankOf(r) : orderKey_(c, Object.assign([], { [c.pri]: priority }));
   let dest = -1, lastFilled = 1;
   for (let i = 0; i < data.length; i++) {
     const row = i + 2;
