@@ -64,7 +64,6 @@
 <body>
 <header>
   <h1>🎤 Voice notes</h1>
-  <a href="../" id="plannerLink">Planner →</a>
 </header>
 
 <main>
@@ -74,8 +73,8 @@
   </section>
 
   <section id="app" class="hidden">
-    <textarea id="note" placeholder="Tap here and talk with Wispr Flow. Say as many things as you like – they get split up and sorted tonight."></textarea>
-    <button class="bigbtn" id="save" disabled>Save note</button>
+    <textarea id="note" placeholder="Talk with Wispr Flow. It saves by itself – just close the app when you're done."></textarea>
+    <button class="bigbtn" id="save" disabled>Save now</button>
     <div class="status" id="status"></div>
 
     <h2 id="waitHead">Waiting for tonight's sort</h2>
@@ -197,17 +196,34 @@
   const saveBtn = $('#save');
   note.value = store.get('voiceDraft', '');
   const updateBtn = () => { saveBtn.disabled = !note.value.trim(); };
-  note.addEventListener('input', () => { updateBtn(); store.set('voiceDraft', note.value); });
+  let idle;
+  note.addEventListener('input', () => {
+    updateBtn(); store.set('voiceDraft', note.value);
+    clearTimeout(idle); idle = setTimeout(() => save(true), 4000);   // saves itself 4 seconds after you stop talking
+  });
   updateBtn();
-  function save() {
+  function save(auto) {
+    clearTimeout(idle);
     const text = note.value.trim();
     if (!text) return;
+    if (auto && document.activeElement === note && note.selectionStart !== note.value.length) return; // still editing in the middle
     queue({ action: 'inboxAdd', id: uid(), text, at: Date.now() });
     note.value = ''; store.set('voiceDraft', ''); updateBtn();
     toast('Saved ✓');
-    note.focus();
+    if (!auto) note.focus();
   }
-  saveBtn.onclick = save;
+  saveBtn.onclick = () => save();
+  // Closing the app or locking the phone saves what's there and sends it straight away.
+  function saveOnLeave() {
+    if (note.value.trim()) save(false);
+    if (outbox.length && settings && !settings.demo) {
+      try {
+        outbox.forEach(op => fetch(settings.api, { method: 'POST', keepalive: true,
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ ...op, key: settings.key }) }));
+      } catch {}
+    }
+  }
+  window.addEventListener('pagehide', saveOnLeave);
   note.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); } });
 
   // ---- Edit / delete a waiting note ----
@@ -239,7 +255,10 @@
   }
 
   window.addEventListener('online', sync);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { sync(); note.focus(); } });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveOnLeave();
+    else { sync(); note.focus(); }
+  });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
   render();

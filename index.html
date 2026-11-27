@@ -129,7 +129,6 @@
         <button data-book="personal">Personal</button>
         <button data-book="work">Work</button>
       </div>
-      <a class="iconbtn" id="voiceBtn" href="voice/" aria-label="Voice notes" style="text-decoration:none">🎤</a>
       <button class="iconbtn" id="refreshBtn" aria-label="Refresh"><span>⟳</span></button>
     </div>
     <nav class="tabs" id="tabs"></nav>
@@ -301,9 +300,7 @@
     if (outbox.length) { el.textContent = `${outbox.length} change${outbox.length > 1 ? 's' : ''} waiting for signal`; return; }
     if (lastError) { el.textContent = lastError; return; }
     const t = store.get('synced', 0);
-    const v = (data?.voice || []).length;
-    const voice = v ? ` · 🎤 ${v} voice note${v > 1 ? 's' : ''} for 8pm sort` : '';
-    el.textContent = settings?.demo ? 'Demo: made-up notes, nothing is saved' : t ? 'Up to date ' + ago(t) + voice : '';
+    el.textContent = settings?.demo ? 'Demo: made-up notes, nothing is saved' : t ? 'Up to date ' + ago(t) : '';
   }
   const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : 'at ' + new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
 
