@@ -1,5 +1,5 @@
 // Keeps Voice notes opening with no signal. Unsent notes are kept by the app itself.
-const CACHE = 'voice-v2';
+const CACHE = 'voice-v3';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

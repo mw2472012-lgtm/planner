@@ -1,8 +1,9 @@
 // Personal / WORK sheets. The same code runs in both files.
 // Works straight away (no permission needed):
 //   Pick a Priority -> rows re-order (New, High, Medium, blank, Low).
-//   Tick Done?/Bought? -> row goes to the bottom, ticked (the Planner app's Sunday-night clear-out deletes it).
-//   Untick it -> row goes back up to its priority.
+//   Tick Done?/Bought? -> row is struck through and stays where it is. Overnight it moves to the bottom
+//   of its own priority group, and every Sunday night done rows are deleted (both run by the Planner app's script).
+//   Untick it -> strike-through comes off.
 //   Pick a tab in Move to -> row moves to that tab.
 //   Any change in a row -> Date modified shows today.
 // Needs "Extras > Turn on extras" once in each file (Google asks you to Allow):
@@ -67,28 +68,39 @@ function stampDate_(sh, L, r) {
   sh.getRange(r, L.date).setValue(Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy'));
 }
 
-// Ticked: the row drops below everything not done. Unticked: it goes back up to its priority.
+// Ticked: struck through, stays where it is (it moves down its priority group overnight). Unticked: back to normal.
 function doneChanged_(e, sh, L, r) {
   if (String(sh.getRange(r, L.text).getValue()).trim() === '') return;
+  const ticked = String(e.value).toUpperCase() === 'TRUE';
+  sh.getRange(r, L.text).setFontLine(ticked ? 'line-through' : 'none');
   stampDate_(sh, L, r);
-  sortByPriority_(sh, L);
-  if (String(e.value).toUpperCase() === 'TRUE') e.source.toast('Done. Moved to the bottom; cleared on Sunday night.');
+  if (ticked) e.source.toast('Done ✓ It moves to the bottom of its priority overnight, and is cleared on Sunday.');
+  else sortByPriority_(sh, L);
 }
 
 const isDone_ = (L, v) => !!L.done && v[L.done - 1] === true;
 
+// 'yyyyMMdd' for a Date or a dd/mm/yyyy text date ('' if neither).
+function dayOf_(d) {
+  if (d instanceof Date) return Utilities.formatDate(d, TZ, 'yyyyMMdd');
+  const m = String(d || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  return m ? m[3] + ('0' + m[2]).slice(-2) + ('0' + m[1]).slice(-2) : '';
+}
+
 // Sorts with the sheet's own sort, so notes, colours and tick-boxes move with their row.
-// Order: New, High, Medium, blank, Low, then done rows (in the same order), then empty rows.
+// Order: New, High, Medium, blank, Low. Within each, rows ticked done before today go last
+// (rows ticked today stay where they are until the night). Empty rows go to the very bottom.
 function sortByPriority_(sh, L) {
   const last = lastDataRow_(sh, L);
   if (last < 3) return;
   const n = last - 1;
   const helper = L.width + 1;
-  const rows = sh.getRange(2, 1, n, Math.max(2, L.done || 0)).getValues();
+  const rows = sh.getRange(2, 1, n, L.width).getValues();
+  const today = Utilities.formatDate(new Date(), TZ, 'yyyyMMdd');
   const keys = rows.map((p, i) => {
     let k = RANK[String(p[L.prio - 1]).trim()];
     if (k === undefined) k = 3;
-    if (isDone_(L, p)) k += 10;                               // done rows sit below the rest
+    k = k * 2 + (isDone_(L, p) && dayOf_(p[L.date - 1]) < today ? 1 : 0);
     if (String(p[L.text - 1]).trim() === '') k = 99;         // empty rows go to the bottom
     return [k * 100000 + i];
   });

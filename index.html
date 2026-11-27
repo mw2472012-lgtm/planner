@@ -97,6 +97,9 @@
   .when input:focus { outline: none; border-color: var(--brand); }
   .when button { min-height: 54px; padding: 0 14px; border-radius: 14px; background: #fff; border: 2px solid var(--line); font-weight: 600; }
   .modified { margin-top: 14px; font-size: 15px; color: var(--soft); }
+  .undo { display: block; margin: 6px 0 0 auto; min-height: 44px; padding: 0 16px; border-radius: 12px;
+    background: #fff; border: 2px solid var(--line); font-weight: 600; font-size: 16px; }
+  .undo:disabled { opacity: .35; }
   .notesbar { position: sticky; bottom: calc(-18px - env(safe-area-inset-bottom)); margin: 16px -16px 0;
     padding: 12px 16px calc(14px + env(safe-area-inset-bottom)); background: var(--bg); box-shadow: 0 -8px 14px rgba(0,0,0,.06); }
   .notesbar .bigbtn { background: #2f6fd1; box-shadow: none; }
@@ -298,6 +301,32 @@
     return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] && m[4] !== '00:00' ? ' ' + m[4] : ''}` : '';
   }
 
+  // ---------- Undo for any text box: steps back through what you typed or dictated ----------
+  function attachUndo(ta) {
+    if (!ta || ta.dataset.undo) return;
+    ta.dataset.undo = '1';
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'undo'; btn.textContent = '↶ Undo';
+    ta.after(btn);
+    const hist = [ta.value];
+    let t;
+    const refresh = () => { btn.disabled = hist.length < 2 && ta.value === hist[0]; };
+    ta.addEventListener('input', e => {
+      if (e.isUndo) return;
+      clearTimeout(t);
+      t = setTimeout(() => { if (ta.value !== hist[hist.length - 1]) hist.push(ta.value); refresh(); }, 600);
+      refresh();
+    });
+    btn.onclick = () => {
+      clearTimeout(t);
+      if (ta.value !== hist[hist.length - 1]) ta.value = hist[hist.length - 1];
+      else if (hist.length > 1) { hist.pop(); ta.value = hist[hist.length - 1]; }
+      const ev = new Event('input'); ev.isUndo = true; ta.dispatchEvent(ev);
+      refresh();
+    };
+    refresh();
+  }
+
   // ---------- Drawing the screen ----------
   function setStatus() {
     const el = $('#status');
@@ -324,7 +353,7 @@
 
     const td = tabData();
     if (!td) { $('#list').innerHTML = `<div class="empty">${busy ? 'Loading your lists…' : esc(lastError || 'Nothing here yet. Tap ⟳ to load.')}</div>`; return; }
-    const items = [...td.items.filter(i => !i.done), ...td.items.filter(i => i.done)];
+    const items = td.items;   // done rows stay where they are (struck through) until they move down overnight
     $('#list').innerHTML = items.length ? items.map((it, idx) => {
       const short = (it.done ? '✓ ' : '') + esc(it.text.replace(URL_RE, '🔗'));
       const meta = [
@@ -411,6 +440,7 @@
         $('#edRepeat').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); changed(); });
     }
     $('#edText').oninput = changed;
+    attachUndo($('#edText')); attachUndo($('#edNote'));
     $('#sheet').querySelectorAll('[data-ex]').forEach(el => {
       const x = td.extras[+el.dataset.ex];
       if (el.tagName === 'INPUT') el.oninput = () => { ex[x.name] = el.value.trim(); changed(); };
@@ -460,7 +490,7 @@
       if (!td.doneLabel && !armed) { armed = true; doneBtn.textContent = 'Tap again to delete'; return; }
       closeSheet();
       sendLater({ action: td.doneLabel ? 'done' : 'remove', book, tab, row: it.row, text: it.text },
-        td.doneLabel ? `${td.doneLabel} ✓ – moved to the bottom` + (tab === 'To film' ? '' : ', cleared Sunday night') : 'Deleted');
+        td.doneLabel ? `${td.doneLabel} ✓` + (tab === 'To film' ? '' : ' – moves down tonight, cleared Sunday') : 'Deleted');
     };
     $('#edUndone') && ($('#edUndone').onclick = () => {
       closeSheet(); send({ action: 'undone', book, tab, row: it.row, text: it.text }); toast('Put back ✓');
@@ -490,6 +520,7 @@
       <div id="adAreaWrap"><div class="label" id="adAreaLabel"></div><div class="chips" id="adArea"></div></div>
       <div class="actions"><button class="bigbtn" id="adSave">Save</button></div>`);
     draw();
+    attachUndo($('#adText'));
     setTimeout(() => $('#adText').focus(), 250);
     $('#adBook').onclick = e => { const x = e.target.closest('button'); if (x) { b = x.dataset.b; draw(); } };
     $('#adTab').onclick = e => { const x = e.target.closest('button'); if (x) { t = x.dataset.t; draw(); } };

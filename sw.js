@@ -1,5 +1,5 @@
 // Keeps the app opening even with no signal. Your notes themselves are saved by the app.
-const CACHE = 'planner-v3';
+const CACHE = 'planner-v4';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
