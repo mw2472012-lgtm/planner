@@ -206,6 +206,14 @@ const ACTIONS = {
     }
     if (c.remind >= 0 && typeof p.remind === 'string') setRemind_(sh.getRange(r, c.remind + 1), p.remind);
     if (c.repeat >= 0 && typeof p.repeat === 'string') sh.getRange(r, c.repeat + 1).setValue(p.repeat);
+    if (p.extras && typeof p.extras === 'object') {
+      const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(x => String(x).trim());
+      const known = [c.pri, c.text, c.note, c.area, c.done, c.date, c.remind, c.repeat, c.move];
+      Object.keys(p.extras).forEach(k => {
+        const i = head.indexOf(String(k).trim());
+        if (i >= 0 && known.indexOf(i) < 0) sh.getRange(r, i + 1).setValue(String(p.extras[k]));
+      });
+    }
     touch_(sh, r, c);
     if (c.pri >= 0 && p.priority && p.priority in RANK) {
       sh.getRange(r, c.pri + 1).setValue(p.priority);
@@ -250,6 +258,11 @@ function readTab_(ss, name) {
     const dv = sh.getRange(2, c.area + 1).getDataValidation();
     if (dv && dv.getCriteriaType() === SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST) areas = dv.getCriteriaValues()[0];
   }
+  // Any other columns (e.g. To film's Type, Use for, File name) are shown and edited as extra fields.
+  const known = [c.pri, c.text, c.note, c.area, c.done, c.date, c.remind, c.repeat, c.move];
+  const head = sh.getRange(1, 1, 1, n).getValues()[0].map(x => String(x).trim());
+  const extras = head.map((h, i) => ({ h, i })).filter(x => x.h && known.indexOf(x.i) < 0)
+    .map(x => ({ name: x.h, col: x.i, options: sh.getMaxRows() >= 2 ? listOf_(sh.getRange(2, x.i + 1)) : [] }));
   const items = [];
   if (last >= 2) {
     const values = sh.getRange(2, 1, last - 1, n).getValues();
@@ -270,6 +283,7 @@ function readTab_(ss, name) {
         modified: fmt_(v[c.date], tz),
         remind: fmt_(v[c.remind], tz, true),
         repeat: c.repeat >= 0 ? String(v[c.repeat] || '') : '',
+        extras: extras.reduce((o, x) => (o[x.name] = String(v[x.col] ?? ''), o), {}),
       });
     });
   }
@@ -282,6 +296,7 @@ function readTab_(ss, name) {
     items: items,
     hasRemind: c.remind >= 0,
     hasNoteBox: c.note >= 0,
+    extras: extras.map(x => ({ name: x.name, options: x.options })),
     repeatOptions: c.repeat >= 0 && sh.getMaxRows() >= 2 ? listOf_(sh.getRange(2, c.repeat + 1)) : [],
   };
 }
@@ -298,6 +313,7 @@ function cols_(sh) {
     date: f(/^Date modified$/i),
     remind: f(/Remind me on/i),
     repeat: f(/^Repeat$/i),
+    move: f(/^Move to$/i),
   };
 }
 

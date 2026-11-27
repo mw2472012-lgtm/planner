@@ -253,6 +253,7 @@
         if (typeof op.remind === 'string') it.remind = remindToText(op.remind);
         if (typeof op.repeat === 'string') it.repeat = op.repeat;
         if (typeof op.note === 'string') { it.note = op.note.trim(); it.hasNote = !!it.note; }
+        if (op.extras) it.extras = { ...(it.extras || {}), ...op.extras };
         it.modified = new Date().toLocaleDateString('en-GB');
         if (op.priority) {
           it.priority = op.priority;
@@ -331,6 +332,7 @@
         it.area ? `<span>${esc(it.area)}</span>` : '',
         it.remind ? `<span>🔔 ${esc(it.remind)}${it.repeat ? ' · 🔁 ' + esc(it.repeat.replace('Every ', '')) : ''}</span>` : '',
         it.hasNote ? '<span>📝 note</span>' : '',
+        ...Object.values(it.extras || {}).filter(Boolean).map(v => `<span>${esc(v)}</span>`),
       ].join('');
       return `<button class="card ${it.done ? 'done' : ''} ${it.pending ? 'pending' : ''}" data-i="${td.items.indexOf(it)}">
         <span class="stripe" style="background:${PCOL[it.priority] || 'var(--line)'}"></span>
@@ -358,6 +360,7 @@
     let prio = it.priority, area = it.area, armed = false;
     const rIn = remindToInputs(it.remind);
     let repeat = it.repeat || '';
+    const ex = { ...(it.extras || {}) };
     const doneWord = td.doneLabel ? td.doneLabel + ' ✓' : 'Delete';
     const links = it.text.match(URL_RE) || [];
     const sheetUrl = data[book].url.replace(/\/edit.*$/, '') + '/edit#gid=' + td.gid;
@@ -370,6 +373,9 @@
       <div class="chips prio" id="edPrio">${Object.keys(RANK).map(p => `<button data-p="${p}" class="${p === prio ? 'on' : ''}">${p}</button>`).join('')}</div>
       ${td.areas.length ? `<div class="label">${esc(td.areaLabel || 'Area')}</div>
       <div class="chips" id="edArea">${td.areas.map(a => `<button data-a="${esc(a)}" class="${a === area ? 'on' : ''}">${esc(a)}</button>`).join('')}</div>` : ''}
+      ${(td.extras || []).map((x, k) => `<div class="label">${esc(x.name)}</div>` + (x.options.length
+        ? `<div class="chips" data-ex="${k}">${x.options.map(o => `<button data-o="${esc(o)}" class="${o === ex[x.name] ? 'on' : ''}">${esc(o)}</button>`).join('')}</div>`
+        : `<div class="when" style="grid-template-columns:1fr"><input data-ex="${k}" value="${esc(ex[x.name] || '')}"></div>`)).join('')}
       ${td.hasRemind ? `<div class="label">📅 Remind me on</div>
       <div class="when"><input type="date" id="edDate" value="${rIn.date}"><input type="time" id="edTime" value="${rIn.time}"><button id="edClear">Clear</button></div>
       ${td.repeatOptions?.length ? `<div class="label">🔁 Repeat</div>
@@ -393,9 +399,10 @@
       </div>` : ''}`);
     const remindVal = () => td.hasRemind ? inputsToRemind($('#edDate').value, $('#edTime').value) : '';
     const remindWas = inputsToRemind(rIn.date, rIn.time);
+    const exChanged = () => (td.extras || []).filter(x => (ex[x.name] || '') !== ((it.extras || {})[x.name] || ''));
     const noteVal = () => td.hasNoteBox ? $('#edNote').value.trim() : (it.note || '');
     const changed = () => $('#edSave').disabled = !($('#edText').value.trim() !== it.text || prio !== it.priority || area !== it.area
-      || noteVal() !== (it.note || '')
+      || noteVal() !== (it.note || '') || exChanged().length > 0
       || (td.hasRemind && (remindVal() !== remindWas || repeat !== (it.repeat || ''))));
     if (td.hasRemind) {
       $('#edDate').oninput = changed; $('#edTime').oninput = changed;
@@ -404,6 +411,13 @@
         $('#edRepeat').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); changed(); });
     }
     $('#edText').oninput = changed;
+    $('#sheet').querySelectorAll('[data-ex]').forEach(el => {
+      const x = td.extras[+el.dataset.ex];
+      if (el.tagName === 'INPUT') el.oninput = () => { ex[x.name] = el.value.trim(); changed(); };
+      else el.onclick = e => { const b = e.target.closest('button'); if (!b) return;
+        ex[x.name] = ex[x.name] === b.dataset.o ? '' : b.dataset.o;
+        el.querySelectorAll('button').forEach(y => y.classList.toggle('on', y.dataset.o === ex[x.name])); changed(); };
+    });
     $('#edNote') && ($('#edNote').oninput = changed);
     const mainParts = () => [...$('#sheet').children].filter(el => !['edNotesPanel'].includes(el.id) && !el.classList.contains('grab'));
     $('#edNotesBtn') && ($('#edNotesBtn').onclick = () => {
@@ -430,6 +444,7 @@
       if (prio !== it.priority) op.priority = prio;
       if (area !== it.area) op.area = area;
       if (noteVal() !== (it.note || '')) op.note = noteVal();
+      if (exChanged().length) op.extras = Object.fromEntries(exChanged().map(x => [x.name, ex[x.name] || '']));
       if (td.hasRemind && remindVal() !== remindWas) op.remind = remindVal();
       if (td.hasRemind && repeat !== (it.repeat || '')) op.repeat = repeat;
       closeSheet(); send(op); toast('Saved ✓');
@@ -530,7 +545,8 @@
         tabOf('To buy', W, 'Bought', [['Medium', 'Backdrop for filming', 'Channel']]),
         tabOf('Remember', W, '', [['Low', 'Timber merchant opens 7am', 'Jobs & income']]),
         tabOf('Notes & ideas', W, '', [['Medium', 'Small-batch shop idea', 'Business ideas']]),
-        tabOf('To film', ['Garden', 'Planning & AI'], 'Captured', [['High', 'Wide shot of the planters', 'Garden']], 'Project'),
+        Object.assign(tabOf('To film', ['Speakers', 'Garden', 'House', 'Planning & AI'], 'Captured', [['High', 'Wide shot of the planters', 'Garden']], 'Project'), {
+          extras: [{ name: 'Type', options: ['Video', 'Photo', 'Voice', 'Screen recording'] }, { name: 'Use for', options: ['Short', 'Long-form', 'Photo post', 'Not sure'] }, { name: 'File name', options: [] }] }),
       ] },
     };
   }
